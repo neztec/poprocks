@@ -16,6 +16,11 @@ export function angleDiff(a: number, b: number): number {
   return d;
 }
 
+/** Wrap an angle into (-PI, PI]. */
+export function wrapAngle(a: number): number {
+  return angleDiff(0, a);
+}
+
 export function turnToward(current: number, target: number, maxStep: number): number {
   const d = angleDiff(current, target);
   if (Math.abs(d) <= maxStep) return target;

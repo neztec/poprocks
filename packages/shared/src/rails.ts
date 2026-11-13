@@ -123,3 +123,39 @@ export function findPath(net: RailNet, from: number, goal: (n: RailNode) => bool
 export function nodeHasCargo(n: RailNode): boolean {
   return totalResources(n.cargo) > 0;
 }
+
+/** Every node connected by track to any of `starts` (including them). */
+export function connectedTo(net: RailNet, starts: number[]): Set<number> {
+  const adj = new Map<number, number[]>();
+  for (const [a, b] of net.edges) {
+    (adj.get(a) ?? adj.set(a, []).get(a)!).push(b);
+    (adj.get(b) ?? adj.set(b, []).get(b)!).push(a);
+  }
+  const seen = new Set(starts);
+  const queue = [...starts];
+  while (queue.length) {
+    for (const n of adj.get(queue.pop()!) ?? []) {
+      if (!seen.has(n)) {
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+  }
+  return seen;
+}
+
+/** What a crew's carts are up to, for the HUD. */
+export interface CartSummary {
+  /** stowed inside the mothership */
+  aboard: number;
+  /** parked on the rail waiting for cargo */
+  waiting: number;
+  /** riding out to cargo or back to the depot */
+  hauling: number;
+  /** some rail node sits inside the mothership's depot ring */
+  depotLinked: boolean;
+  /** cargo piles sitting on rail nodes */
+  cargoPiles: number;
+  /** cargo piles no cart can reach from the depot */
+  unreachablePiles: number;
+}

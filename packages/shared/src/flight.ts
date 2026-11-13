@@ -1,18 +1,33 @@
-import { DRILL, SHIP_SPECS, STICK_DEADZONE, type ShipKind } from './constants';
+import { BRAKE_FACTOR, DRILL, FORMATION, MOTHERSHIP_LOCAL, SHIP_SPECS, STICK_DEADZONE, type ShipKind, type ShipSpec } from './constants';
 import { MATERIALS } from './materials';
-import { angleDiff, turnToward } from './math';
+import { angleDiff, clamp, turnToward, wrapAngle } from './math';
 import { averageHardness, collideCircle, paintCircle, type Asteroid, type PaintOp } from './terrain';
 
+/**
+ * One tick of control. Two ways to steer, which can't both apply in the same tick:
+ * - point (mouse / stick): `sx, sy` is the direction to face and fly, magnitude 0..1.
+ * - rotate (keyboard, Star Control style): `turn` spins the ship, `thrust` pushes along the nose.
+ */
 export interface InputState {
-  /** desired direction, magnitude 0..1 */
   sx: number;
   sy: number;
+  /** -1 = counter-clockwise, 1 = clockwise */
+  turn: number;
+  /** forward thrust along the heading, 0..1 */
+  thrust: number;
+  /** retro-thrust that bleeds off speed without reversing */
+  brake: boolean;
   boost: boolean;
   /** drill / lay rail */
   action: boolean;
 }
 
-export const NO_INPUT: InputState = { sx: 0, sy: 0, boost: false, action: false };
+export const NO_INPUT: InputState = { sx: 0, sy: 0, turn: 0, thrust: 0, brake: false, boost: false, action: false };
+
+/** True when the input asks the ship to move or turn (cancels autopilot). */
+export function isManual(inp: InputState): boolean {
+  return Math.hypot(inp.sx, inp.sy) > STICK_DEADZONE || Math.abs(inp.turn) > 0.05 || inp.thrust > 0.05 || inp.brake;
+}
 
 export interface Autopilot {
   x: number;
@@ -45,6 +60,8 @@ export interface GravityBody {
 
 export interface StepEnv {
   dt: number;
+  /** stepping on the galaxy map (motherships use their hyperspace spec there) */
+  galaxy?: boolean;
   asteroids: Asteroid[];
   bodies: GravityBody[];
   /** called for each terrain edit the ship makes */
@@ -76,51 +93,81 @@ export function gravityAt(bodies: GravityBody[], x: number, y: number): [number,
   return [gx, gy];
 }
 
+/** Where an unmanned craft holds station: evenly spaced around the mothership, rotating with it. */
+export function formationSlot(m: { x: number; y: number; angle: number }, slot: number, count: number): { x: number; y: number; angle: number } {
+  const a = m.angle + ((slot + 0.5) / Math.max(1, count)) * Math.PI * 2;
+  return { x: m.x + Math.cos(a) * FORMATION.radius, y: m.y + Math.sin(a) * FORMATION.radius, angle: m.angle };
+}
+
+/** Flight numbers for a ship in the space it's in. Motherships are fast on the galaxy map, slow inside a system. */
+export function specFor(kind: ShipKind, galaxy: boolean | undefined): ShipSpec {
+  return kind === 'mothership' && !galaxy ? MOTHERSHIP_LOCAL : SHIP_SPECS[kind];
+}
+
 /** Advance one ship by one fixed step. Deterministic given the same state, input and terrain. */
 export function stepShip(s: ShipState, inp: InputState, env: StepEnv): void {
-  const spec = SHIP_SPECS[s.kind];
+  const spec = specFor(s.kind, env.galaxy);
   const dt = env.dt;
   let mag = Math.hypot(inp.sx, inp.sy);
-  const steering = mag > STICK_DEADZONE;
+  const pointing = mag > STICK_DEADZONE;
   if (mag > 1) mag = 1;
 
   if (s.kind === 'mothership' && s.ap) {
-    if (steering) s.ap = null; // any manual thrust takes back control
+    if (isManual(inp)) s.ap = null; // any manual control takes the helm back
     else {
-      autopilot(s, dt);
+      autopilot(s, spec, dt);
       integrate(s, env, spec.radius, spec.restitution);
       return;
     }
   }
 
-  s.boosting = inp.boost && steering;
+  // Resolve both control styles to "turn the nose, then push along it".
+  let thrust = 0;
+  let align = 1;
+  if (pointing) {
+    const target = Math.atan2(inp.sy, inp.sx);
+    s.angle = turnToward(s.angle, target, spec.turnRate * dt);
+    thrust = mag;
+    // Thrust is weaker while still turning to face the stick direction.
+    align = 0.25 + 0.75 * Math.max(0, Math.cos(angleDiff(s.angle, target)));
+  } else {
+    const turn = clamp(inp.turn, -1, 1);
+    if (turn !== 0) s.angle = wrapAngle(s.angle + turn * spec.turnRate * dt);
+    thrust = clamp(inp.thrust, 0, 1);
+  }
+  const thrusting = thrust > 0.05;
+
+  s.boosting = inp.boost && thrusting;
   const topSpeed = s.boosting ? spec.boostSpeed : spec.speed;
 
-  if (steering) {
-    s.angle = turnToward(s.angle, Math.atan2(inp.sy, inp.sx), spec.turnRate * dt);
-  }
-
   if (spec.model === 'glide') {
-    // Antopolous-style: holding the stick flies at a held speed along the heading; letting go coasts.
-    if (steering) {
+    // Antopolous-style: thrusting flies at a held speed along the heading; letting go coasts.
+    if (thrusting) {
       const speed = Math.hypot(s.vx, s.vy);
-      const target = topSpeed * mag;
+      const target = topSpeed * thrust;
       const next = speed < target ? Math.min(target, speed + spec.thrust * dt) : Math.max(target, speed - spec.thrust * dt);
       s.vx = Math.cos(s.angle) * next;
       s.vy = Math.sin(s.angle) * next;
     }
   } else {
-    if (steering) {
-      // Thrust is weaker while still turning to face the stick direction.
-      const align = Math.max(0, Math.cos(angleDiff(s.angle, Math.atan2(inp.sy, inp.sx))));
-      const a = spec.thrust * mag * (0.25 + 0.75 * align);
+    if (thrusting) {
+      const a = spec.thrust * thrust * align;
       s.vx += Math.cos(s.angle) * a * dt;
       s.vy += Math.sin(s.angle) * a * dt;
     }
-    const decay = Math.exp(-(spec.drag + (steering ? 0 : spec.idleDrag)) * dt);
+    const decay = Math.exp(-(spec.drag + (thrusting ? 0 : spec.idleDrag)) * dt);
     s.vx *= decay;
     s.vy *= decay;
     limitSpeed(s, topSpeed);
+  }
+
+  if (inp.brake) {
+    const sp = Math.hypot(s.vx, s.vy);
+    if (sp > 0) {
+      const next = Math.max(0, sp - spec.thrust * BRAKE_FACTOR * dt);
+      s.vx *= next / sp;
+      s.vy *= next / sp;
+    }
   }
 
   if (spec.gravity && env.bodies.length > 0) {
@@ -212,9 +259,8 @@ function limitSpeed(s: ShipState, max: number): void {
 }
 
 /** Steer toward the autopilot target, arriving with low speed. */
-function autopilot(s: ShipState, dt: number): void {
+function autopilot(s: ShipState, spec: ShipSpec, dt: number): void {
   const ap = s.ap!;
-  const spec = SHIP_SPECS.mothership;
   const dx = ap.x - s.x;
   const dy = ap.y - s.y;
   const dist = Math.hypot(dx, dy) || 1;

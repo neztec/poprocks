@@ -3,6 +3,9 @@ import { fbm } from './math';
 
 /** World pixels per terrain cell. */
 export const CELL = 15;
+
+/** Natural cave shape: noise frequency (lower = longer, wider-spaced tunnels) and band half-width (higher = wider tunnels). */
+export const CAVES = { scale: 0.02, band: 0.035 };
 /** Cells per render/dirty chunk edge. */
 export const CHUNK = 64;
 
@@ -76,8 +79,8 @@ export function generateAsteroid(def: AsteroidDef): Asteroid {
 
       const depth = 1 - d / edge; // 0 at surface, 1 at core
       // Worm-like natural caves where the noise field crosses its midline.
-      const cave = fbm(col * 0.025, row * 0.025, seed + 7, 4);
-      if (depth > 0.07 && Math.abs(cave - 0.5) < 0.022) continue;
+      const cave = fbm(col * CAVES.scale, row * CAVES.scale, seed + 7, 4);
+      if (depth > 0.07 && Math.abs(cave - 0.5) < CAVES.band) continue;
 
       let mat: number = depth < 0.1 ? MAT.CRUST : depth < 0.55 ? MAT.ROCK : MAT.DEEP;
       if (mat !== MAT.CRUST) {

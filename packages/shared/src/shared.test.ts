@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { DT } from './constants';
 import { NO_INPUT, copyShip, makeShip, stepShip, type InputState } from './flight';
 import { MAT } from './materials';
+import { angleDiff } from './math';
 import { emptyRailNet, extendRail, findPath, isDepot } from './rails';
 import { applyPaint, cellAt, collideCircle, decodeCells, encodeCells, generateAsteroid } from './terrain';
 
@@ -37,7 +38,7 @@ test('carving is idempotent and reports mined materials', () => {
 
 test('flight step is deterministic (client prediction depends on this)', () => {
   const inputs: InputState[] = [];
-  for (let i = 0; i < 120; i++) inputs.push({ sx: Math.cos(i * 0.05), sy: Math.sin(i * 0.05), boost: i % 30 < 10, action: true });
+  for (let i = 0; i < 120; i++) inputs.push({ ...NO_INPUT, sx: Math.cos(i * 0.05), sy: Math.sin(i * 0.05), boost: i % 30 < 10, action: true });
   const run = () => {
     const terrain = [generateAsteroid(def)];
     const s = makeShip(1, 'driller', -1500, 0);
@@ -50,7 +51,7 @@ test('flight step is deterministic (client prediction depends on this)', () => {
 test('ships do not pass through rock', () => {
   const terrain = [generateAsteroid(def)];
   const s = makeShip(1, 'scout', -1600, 0);
-  const push: InputState = { sx: 1, sy: 0, boost: true, action: false };
+  const push: InputState = { ...NO_INPUT, sx: 1, boost: true };
   for (let i = 0; i < 300; i++) stepShip(s, push, { dt: DT, asteroids: terrain, bodies: [] });
   assert.ok(s.x < -600, `scout ended up inside the asteroid at x=${s.x}`);
 });
@@ -58,7 +59,7 @@ test('ships do not pass through rock', () => {
 test('driller tunnels into rock', () => {
   const terrain = [generateAsteroid(def)];
   const s = makeShip(1, 'driller', -1500, 0);
-  const drill: InputState = { sx: 1, sy: 0, boost: false, action: true };
+  const drill: InputState = { ...NO_INPUT, sx: 1, action: true };
   for (let i = 0; i < 300; i++) stepShip(s, drill, { dt: DT, asteroids: terrain, bodies: [] });
   assert.ok(s.x > -700, `driller only reached x=${s.x}`);
 });
@@ -66,12 +67,35 @@ test('driller tunnels into rock', () => {
 test('mothership autopilot cancels on manual input', () => {
   const s = makeShip(1, 'mothership', 0, 0);
   s.ap = { x: 5000, y: 0, systemId: 3 };
-  stepShip(s, NO_INPUT, { dt: DT, asteroids: [], bodies: [] });
+  stepShip(s, NO_INPUT, { dt: DT, asteroids: [], bodies: [], galaxy: true });
   assert.ok(s.ap);
   const before = copyShip(s);
-  stepShip(s, { sx: 0, sy: 1, boost: false, action: false }, { dt: DT, asteroids: [], bodies: [] });
+  stepShip(s, { ...NO_INPUT, sy: 1 }, { dt: DT, asteroids: [], bodies: [], galaxy: true });
   assert.equal(s.ap, null);
   assert.ok(before.ap);
+});
+
+test('keyboard: A/D rotate in place, W thrusts along the nose, S brakes', () => {
+  const s = makeShip(1, 'driller', 0, 0, 0);
+  for (let i = 0; i < 15; i++) stepShip(s, { ...NO_INPUT, turn: 1 }, { dt: DT, asteroids: [], bodies: [] });
+  assert.ok(s.angle > 1, `expected a clockwise turn, angle=${s.angle}`);
+  assert.equal(Math.hypot(s.vx, s.vy), 0, 'turning alone should not move the ship');
+  const heading = s.angle;
+  for (let i = 0; i < 30; i++) stepShip(s, { ...NO_INPUT, thrust: 1 }, { dt: DT, asteroids: [], bodies: [] });
+  assert.ok(Math.abs(angleDiff(Math.atan2(s.vy, s.vx), heading)) < 0.01, 'thrust should push along the heading');
+  const fast = Math.hypot(s.vx, s.vy);
+  for (let i = 0; i < 10; i++) stepShip(s, { ...NO_INPUT, brake: true }, { dt: DT, asteroids: [], bodies: [] });
+  assert.ok(Math.hypot(s.vx, s.vy) < fast * 0.3, 'brake should bleed off speed');
+});
+
+test('mothership is slow inside a system and fast on the galaxy map', () => {
+  const run = (galaxy: boolean) => {
+    const s = makeShip(1, 'mothership', 0, 0);
+    for (let i = 0; i < 600; i++) stepShip(s, { ...NO_INPUT, thrust: 1 }, { dt: DT, asteroids: [], bodies: [], galaxy });
+    return Math.hypot(s.vx, s.vy);
+  };
+  assert.ok(run(false) <= 111);
+  assert.ok(run(true) > 500);
 });
 
 test('rails extend, snap, and path to a depot', () => {

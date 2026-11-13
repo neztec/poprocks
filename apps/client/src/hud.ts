@@ -1,4 +1,5 @@
 import { CART_COST, SHIP_SPECS, totalResources, type CraftKind } from '@poprock/shared';
+import { CrewPanel } from './crewpanel';
 import type { Action } from './input';
 import type { World } from './world';
 
@@ -8,13 +9,14 @@ const CRAFT_KEYS: Record<CraftKind, string> = { scout: '1', driller: '2', layer:
 const HELP = `
 <h3>Controls</h3>
 <table>
-<tr><td>Steer</td><td>Hold <kbd>LMB</kbd> toward cursor · <kbd>WASD</kbd> · left stick</td></tr>
+<tr><td>Turn</td><td><kbd>A</kbd>/<kbd>D</kbd> rotate · or hold <kbd>LMB</kbd> toward the cursor · left stick points</td></tr>
+<tr><td>Thrust / brake</td><td><kbd>W</kbd> thrust along the nose · <kbd>S</kbd> brake</td></tr>
 <tr><td>Boost</td><td><kbd>Shift</kbd> · <kbd>LT</kbd></td></tr>
 <tr><td>Drill / lay rail</td><td><kbd>Space</kbd> · <kbd>RMB</kbd> · <kbd>RT</kbd></td></tr>
-<tr><td>Launch craft</td><td><kbd>1</kbd> Scout · <kbd>2</kbd> Driller · <kbd>3</kbd> Rail layer · pad <kbd>Y</kbd> pick, <kbd>B</kbd> launch</td></tr>
-<tr><td>Dock</td><td><kbd>E</kbd> · <kbd>B</kbd> (near the mothership)</td></tr>
+<tr><td>Board a craft</td><td>Drag your face onto a craft (panel or world) · <kbd>1</kbd> Scout · <kbd>2</kbd> Driller · <kbd>3</kbd> Rail layer · pad <kbd>Y</kbd> pick, <kbd>B</kbd> board</td></tr>
+<tr><td>Dock</td><td>Fly back into your formation slot · <kbd>E</kbd> · <kbd>B</kbd> (near the mothership)</td></tr>
 <tr><td>Drop cargo on rail</td><td><kbd>Q</kbd> · <kbd>X</kbd></td></tr>
-<tr><td>Take/leave helm</td><td><kbd>H</kbd> · <kbd>Start</kbd></td></tr>
+<tr><td>Fly the mothership</td><td>Drag your face to <b>HELM</b> · <kbd>H</kbd> · <kbd>Start</kbd> — slow in a system, fast in hyperspace</td></tr>
 <tr><td>Jump to hyperspace</td><td><kbd>J</kbd> · <kbd>Back</kbd> (pilot, in a system)</td></tr>
 <tr><td>Pick a star</td><td>Click it · <kbd>Tab</kbd> · d-pad ◀ ▶</td></tr>
 <tr><td>Autopilot to it</td><td><kbd>Enter</kbd> · <kbd>A</kbd> — steering takes back control</td></tr>
@@ -27,6 +29,7 @@ drop cargo on the rail → carts haul it home. Or just dock with a full hold.</p
 export class Hud {
   private status: HTMLElement;
   private crew: HTMLElement;
+  readonly crewPanel: CrewPanel;
   private context: HTMLElement;
   private toasts: HTMLElement;
   private help: HTMLElement;
@@ -44,6 +47,7 @@ export class Hud {
       <div id="conn" class="panel">Connection lost — reconnecting…</div>`;
     this.status = root.querySelector('#status')!;
     this.crew = root.querySelector('#crew')!;
+    this.crewPanel = new CrewPanel(this.crew);
     this.context = root.querySelector('#context')!;
     this.toasts = root.querySelector('#toasts')!;
     this.help = root.querySelector('#help')!;
@@ -84,24 +88,18 @@ export class Hud {
       `<h3>${crew.name}</h3>
        <div class="loc">${esc(crew.location)}</div>
        <div><span class="ferrite">■ ${crew.resources.ferrite} ferrite</span> &nbsp; <span class="auric">■ ${crew.resources.auric} auric</span></div>
-       <div class="dim">${crew.carts} rail cart${crew.carts === 1 ? '' : 's'} · <kbd>?</kbd> controls</div>`,
+       <div class="dim"><kbd>?</kbd> controls</div>`,
     );
 
-    this.set(
-      'crew',
-      `<h3>Crew</h3>` +
-        crew.members
-          .map((m) => {
-            const role = m.id === crew.pilotId ? '<span class="pilot">helm</span>' : m.craft ? SHIP_SPECS[m.craft].label : '<span class="dim">aboard</span>';
-            return `<div>${m.id === world.playerId ? '▸ ' : ''}${esc(m.name)} <span class="dim">·</span> ${role}</div>`;
-          })
-          .join(''),
-    );
+    this.crewPanel.update(crew, world.playerId);
 
     let ctx = '';
     if (myCraft) {
       const spec = SHIP_SPECS[myCraft];
       ctx += `<div><b>${spec.label}</b> · ${hintFor(myCraft, gamepad)}</div>`;
+      if (myCraft === 'layer' && crew.cartStatus && !crew.cartStatus.depotLinked) {
+        ctx += `<div class="warn">Run the track into the mothership's green depot ring so carts can deploy.</div>`;
+      }
       const cargo = world.you?.cargo;
       if (cargo && spec.hold > 0) {
         const n = totalResources(cargo);
@@ -112,9 +110,14 @@ export class Hud {
         myCraft === 'driller' ? `<button data-action="drop">Drop cargo on rail <kbd>${gamepad ? 'X' : 'Q'}</kbd></button>` : ''
       }</div>`;
     } else if (crew.inSystem) {
-      ctx += `<div>Aboard the mothership — choose a craft to launch.</div><div class="row">`;
+      ctx += isPilot
+        ? `<div>At the helm — <kbd>A</kbd>/<kbd>D</kbd> turn, <kbd>W</kbd> thrust, <kbd>S</kbd> brake. The mothership is slow here.</div><div class="row">`
+        : `<div>In crew quarters — drag your face onto a craft to board it, or onto the helm.</div><div class="row">`;
       for (const k of Object.keys(CRAFT_ACTIONS) as CraftKind[]) {
-        ctx += `<button data-action="${CRAFT_ACTIONS[k]}" class="${k === selectedCraft ? 'selected' : ''}">${SHIP_SPECS[k].label} <kbd>${CRAFT_KEYS[k]}</kbd></button>`;
+        const free = crew.fleet.filter((f) => f.kind === k && f.pilotId == null).length;
+        ctx += `<button data-action="${CRAFT_ACTIONS[k]}" class="${k === selectedCraft ? 'selected' : ''}" ${free ? '' : 'disabled'}>${
+          SHIP_SPECS[k].label
+        } ×${free} <kbd>${CRAFT_KEYS[k]}</kbd></button>`;
       }
       ctx += `<button data-action="buildCart" ${crew.resources.ferrite < CART_COST.ferrite ? 'disabled' : ''}>Build cart (${CART_COST.ferrite} ferrite) <kbd>C</kbd></button>`;
       ctx += `</div><div class="row">${helmButton(isPilot, crew.pilotId != null, gamepad)}`;

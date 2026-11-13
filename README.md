@@ -35,17 +35,19 @@ npm run typecheck
 
 Press `?` in game for the full control list. Mouse, keyboard and a standard gamepad all work.
 
-1. You start aboard the crew mothership, parked in **Vesta (Home)**.
-2. Launch a **Driller** (`2`). Hold left mouse toward where you want to go, hold `Space`/right mouse to drill into
+1. You start in the mothership's crew quarters, parked in **Vesta (Home)**. The crew panel (top right) shows the
+   helm, the quarters, and the fleet holding formation around the ship.
+2. Drag your face onto a **Driller** (or press `2`). Steer with `A`/`D`, thrust with `W`, brake with `S`, or hold
+   left mouse toward where you want to go. Hold `Space`/right mouse to drill into
    *Vesta Major* to the west. Orange **ferrite** and gold **auric** fill your hold.
-3. Dock (`E`) inside the blue ring to deliver ore, **or** build the rail loop:
+3. Fly back into your craft's formation slot (or press `E` inside the blue ring) to dock and deliver ore, **or** build the rail loop:
    launch a **Rail Layer** (`3`), hold `Space` to lay track from your tunnels back into the mothership's green
    depot ring, then in the Driller press `Q` next to the rail to drop cargo. A cart hauls it home.
 4. Spend 40 ferrite on another cart (`C`).
-5. Take the helm (`H`), jump (`J`), and in hyperspace click a star to autopilot there. Steering takes over manually;
+5. Drag your face to the **helm** (or `H`) to drive the mothership. It's slow inside a system. Jump (`J`), and in hyperspace click a star to autopilot there. Steering takes over manually;
    flying into a star drops you into its system.
 
-Scouts are fast gliders that feel the star's gravity — let go of the stick to coast and slingshot.
+Scouts are fast gliders that feel the star's gravity — let go of thrust to coast and slingshot.
 
 ## Admin
 

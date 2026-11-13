@@ -2,6 +2,7 @@ import {
   DT,
   RAIL,
   RESOURCE_KINDS,
+  connectedTo,
   createAsteroid,
   emptyResources,
   encodeCells,
@@ -16,6 +17,7 @@ import {
   totalResources,
   type Asteroid,
   type AsteroidWire,
+  type CartSummary,
   type CraftKind,
   type GravityBody,
   type PaintOp,
@@ -28,14 +30,19 @@ import {
 } from '@poprock/shared';
 import type { AsteroidRow, Store, SystemRow } from './db';
 
+/** A craft in a crew's fleet. It holds a formation slot around the mothership until someone boards it. */
 export interface Craft {
   ship: ShipState;
   kind: CraftKind;
-  ownerId: number;
   crewId: number;
+  slot: number;
+  /** player flying it, or null while it sits in formation */
+  pilotId: number | null;
   cargo: Resources;
   /** rail node the layer is currently extending from */
   railTail: number | null;
+  /** has left its slot since boarding, so flying back into the slot re-docks it */
+  armed: boolean;
 }
 
 type CartState = 'garage' | 'idle' | 'toPickup' | 'toDepot';
@@ -53,7 +60,12 @@ export interface Cart {
   pathIdx: number;
   cargo: Resources;
   claim: number | null;
+  /** seconds this cart has been cut off from the depot (mothership moved away) */
+  stranded: number;
 }
+
+/** How long a cart waits, cut off from the depot, before the mothership recalls it. */
+const RECALL_AFTER = 2;
 
 export interface Critter {
   id: number;
@@ -194,6 +206,7 @@ export class SystemSpace {
         pathIdx: 0,
         cargo: emptyResources(),
         claim: null,
+        stranded: 0,
       });
     }
   }
@@ -214,15 +227,64 @@ export class SystemSpace {
     c.at = null;
     c.path = [];
     c.claim = null;
+    c.stranded = 0;
+  }
+
+  /** Pull a cut-off cart back aboard. Its load stays on the rail where it was, for a later cart to collect. */
+  private recall(c: Cart): void {
+    const node = c.at != null ? getNode(this.rails, c.at) : undefined;
+    if (node && totalResources(c.cargo) > 0) {
+      for (const k of RESOURCE_KINDS) node.cargo[k] += c.cargo[k];
+      c.cargo = emptyResources();
+      this.railsDirty = true;
+      this.railsUnsaved = true;
+    }
+    this.toGarage(c);
+  }
+
+  private depotNodes(x: number, y: number): number[] {
+    return this.rails.nodes.filter((n) => isDepot(n, x, y)).map((n) => n.id);
+  }
+
+  cartSummary(crewId: number): CartSummary {
+    const home = this.host.parkedMotherships(this.row.id).find((p) => p.crewId === crewId);
+    const depots = home ? this.depotNodes(home.x, home.y) : [];
+    const linked = connectedTo(this.rails, depots);
+    const out: CartSummary = { aboard: 0, waiting: 0, hauling: 0, depotLinked: depots.length > 0, cargoPiles: 0, unreachablePiles: 0 };
+    for (const c of this.carts) {
+      if (c.crewId !== crewId) continue;
+      if (c.state === 'garage') out.aboard++;
+      else if (c.state === 'idle') out.waiting++;
+      else out.hauling++;
+    }
+    for (const n of this.rails.nodes) {
+      if (!nodeHasCargo(n)) continue;
+      out.cargoPiles++;
+      if (!linked.has(n.id)) out.unreachablePiles++;
+    }
+    return out;
   }
 
   private stepCarts(dt: number): void {
     const parked = this.host.parkedMotherships(this.row.id);
     const claimed = new Set(this.carts.map((c) => c.claim).filter((v): v is number => v != null));
+    // Track connected to each crew's depot, recomputed every tick because the mothership can move.
+    const linkedByCrew = new Map<number, Set<number>>();
+    for (const p of parked) linkedByCrew.set(p.crewId, connectedTo(this.rails, this.depotNodes(p.x, p.y)));
     for (const cart of this.carts) {
       const home = parked.find((p) => p.crewId === cart.crewId);
       if (!home) continue;
       const depot = (n: RailNode) => isDepot(n, home.x, home.y);
+
+      // A cart on track that no longer reaches the mothership gets recalled after a short grace period.
+      if (cart.state !== 'garage') {
+        const linked = linkedByCrew.get(cart.crewId)!;
+        if (cart.at != null && linked.has(cart.at)) cart.stranded = 0;
+        else if ((cart.stranded += dt) > RECALL_AFTER) {
+          this.recall(cart);
+          continue;
+        }
+      }
 
       if (cart.state === 'garage') {
         cart.x = home.x;
@@ -247,6 +309,10 @@ export class SystemSpace {
         if (cart.at == null || !getNode(this.rails, cart.at)) {
           this.toGarage(cart);
           continue;
+        }
+        if (totalResources(cart.cargo) > 0 && depot(getNode(this.rails, cart.at)!)) {
+          this.host.deposit(cart.crewId, cart.cargo);
+          cart.cargo = emptyResources();
         }
         const pickup = findPath(this.rails, cart.at, (n) => nodeHasCargo(n) && !claimed.has(n.id));
         if (pickup) {
@@ -312,6 +378,12 @@ export class SystemSpace {
           cart.state = 'toDepot';
         } else cart.state = 'idle';
       } else if (cart.state === 'toDepot') {
+        const node = cart.at != null ? getNode(this.rails, cart.at) : undefined;
+        if (!node || !depot(node)) {
+          // The mothership moved while we were en route; find the depot again.
+          cart.state = 'idle';
+          continue;
+        }
         if (totalResources(cart.cargo) > 0) {
           this.host.deposit(cart.crewId, cart.cargo);
           cart.cargo = emptyResources();
@@ -347,7 +419,7 @@ export class SystemSpace {
   }
 
   private stepCritters(dt: number): void {
-    const crafts = [...this.crafts.values()];
+    const crafts = [...this.crafts.values()].filter((c) => c.pilotId != null);
     for (const c of this.critters) {
       c.wander += (this.rand() - 0.5) * 2.5 * dt;
       let ax = Math.cos(c.wander) * 60;

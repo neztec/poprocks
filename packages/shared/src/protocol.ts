@@ -1,7 +1,7 @@
 import type { CraftKind, EntityKind } from './constants';
 import type { GravityBody, InputState, ShipState } from './flight';
 import type { Resources } from './materials';
-import type { RailNet } from './rails';
+import type { CartSummary, RailNet } from './rails';
 import type { PaintOp } from './terrain';
 
 // ---- client -> server --------------------------------------------------------
@@ -9,8 +9,13 @@ import type { PaintOp } from './terrain';
 export type ClientMsg =
   | { t: 'hello'; name: string }
   | { t: 'input'; seq: number; i: InputState }
+  /** board the first free craft of this kind */
   | { t: 'launch'; craft: CraftKind }
+  /** board a specific fleet craft (drag-and-drop) */
+  | { t: 'board'; craftId: number }
   | { t: 'dock' }
+  /** move yourself to a seat aboard the mothership */
+  | { t: 'seat'; seat: 'helm' | 'quarters' }
   | { t: 'helm'; take: boolean }
   | { t: 'autopilot'; systemId: number | null }
   | { t: 'jump' }
@@ -43,6 +48,8 @@ export type SpaceInfo =
 export const FLAG_DRILLING = 1;
 export const FLAG_BOOSTING = 2;
 export const FLAG_LOADED = 4;
+/** an unmanned craft holding station in formation */
+export const FLAG_IDLE = 8;
 
 export interface EntWire {
   id: number;
@@ -69,9 +76,24 @@ export interface YouWire {
 }
 
 export interface CrewMember {
-  id: number;
+  /** player id while online, null for an offline crew member */
+  id: number | null;
   name: string;
+  online: boolean;
+  /** fleet craft this member is flying */
+  craftId: number | null;
   craft: CraftKind | null;
+}
+
+export interface FleetCraftWire {
+  /** entity id of the craft */
+  id: number;
+  kind: CraftKind;
+  /** formation slot around the mothership */
+  slot: number;
+  pilotId: number | null;
+  /** away from its formation slot */
+  out: boolean;
 }
 
 export interface CrewWire {
@@ -79,8 +101,11 @@ export interface CrewWire {
   name: string;
   resources: Resources;
   carts: number;
+  /** null in hyperspace */
+  cartStatus: CartSummary | null;
   pilotId: number | null;
   members: CrewMember[];
+  fleet: FleetCraftWire[];
   /** where the mothership is: a system name or 'Hyperspace' */
   location: string;
   inSystem: boolean;

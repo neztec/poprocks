@@ -95,9 +95,38 @@ export const SHIP_SPECS: Record<ShipKind, ShipSpec> = {
   },
 };
 
+/** The mothership inside a star system: a slow, heavy base of operations. */
+export const MOTHERSHIP_LOCAL: ShipSpec = {
+  ...SHIP_SPECS.mothership,
+  turnRate: 0.45,
+  speed: 110,
+  boostSpeed: 160,
+  thrust: 55,
+  drag: 0.15,
+  idleDrag: 0.35,
+  restitution: 0.05,
+};
+
+/** Braking decelerates at this multiple of a ship's thrust. */
+export const BRAKE_FACTOR = 1.2;
+
+/** Unmanned craft hold station in a ring around their mothership. */
+export const FORMATION = {
+  radius: 230,
+  /** a returning craft this close to its slot re-docks */
+  dockRadius: 90,
+  /** a craft must get this far from its slot before flying back re-docks it */
+  armDistance: 160,
+  /** how fast an unmanned craft flies home to its slot */
+  returnSpeed: 420,
+};
+
+/** The craft a new crew starts with, in formation-slot order. */
+export const DEFAULT_FLEET: CraftKind[] = ['scout', 'driller', 'layer', 'driller'];
+
 export const DRILL = {
-  reach: 34,
-  radius: 30,
+  reach: 40,
+  radius: 38,
   /** Max speed while carving material of hardness 1. */
   speed: 190,
 };

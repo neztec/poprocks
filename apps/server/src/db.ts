@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { emptyRailNet, type GravityBody, type RailNet, type Resources } from '@poprock/shared';
+import { emptyRailNet, type CraftKind, type GravityBody, type RailNet, type Resources } from '@poprock/shared';
 import { seedGalaxy } from './seed';
 
 export interface SystemDef {
@@ -37,6 +37,13 @@ export interface CrewData {
   gx: number;
   gy: number;
   angle: number;
+  /** mothership position inside its parked system */
+  lx?: number;
+  ly?: number;
+  /** craft kinds by formation slot */
+  fleet?: CraftKind[];
+  /** every name that has come aboard, so offline members still show in crew quarters */
+  roster?: string[];
 }
 
 export type EventKind = 'broadcast' | 'spawnCritters' | 'oreBloom' | 'grantResources';

@@ -4,14 +4,18 @@ import {
   DRILL,
   FLAG_BOOSTING,
   FLAG_DRILLING,
+  FLAG_IDLE,
   FLAG_LOADED,
+  FORMATION,
   GALAXY,
   MAT,
   RAIL,
+  formationSlot,
   nodeHasCargo,
   type EntityKind,
   type SystemWire,
 } from '@poprock/shared';
+import type { SeatTarget } from '../crewpanel';
 import type { DisplayEnt, World } from '../world';
 import { TerrainView } from './terrain';
 
@@ -53,6 +57,9 @@ export class Scene {
   private galaxyLabels = new Container();
   private systemLabels = new Map<number, Text>();
   private overlayG = new Graphics();
+  private formationG = new Graphics();
+  /** entity highlighted as a drop target while dragging a crew face */
+  hoverId: number | null = null;
   private views = new Map<number, EntView>();
   private particles: Particle[] = [];
   private builtSpace = -1;
@@ -75,7 +82,7 @@ export class Scene {
       this.app.stage.addChild(t);
     }
     this.fxG.blendMode = 'add';
-    this.world.addChild(this.galaxyG, this.galaxyLabels, this.bodiesG, this.terrainLayer, this.railsG, this.entLayer, this.fxG);
+    this.world.addChild(this.galaxyG, this.galaxyLabels, this.bodiesG, this.terrainLayer, this.railsG, this.formationG, this.entLayer, this.fxG);
     this.app.stage.addChild(this.world, this.overlayG);
   }
 
@@ -109,6 +116,27 @@ export class Scene {
     for (const s of world.systems) {
       const p = this.worldToScreen(s.gx, s.gy);
       if (Math.hypot(p.x - sx, p.y - sy) < 28) return s;
+    }
+    return null;
+  }
+
+  /** What a crew face dropped at this screen point would land on: one of our craft, or the mothership. */
+  seatTargetAt(world: World, sx: number, sy: number): SeatTarget | null {
+    if (this.kind !== 'system' || !world.crew) return null;
+    const z = this.currentZoom;
+    let best: { id: number; d: number } | null = null;
+    for (const f of world.crew.fleet) {
+      const d = world.ents.get(f.id);
+      if (!d) continue;
+      const p = this.worldToScreen(d.x, d.y);
+      const dist = Math.hypot(p.x - sx, p.y - sy);
+      if (dist < Math.max(26, 30 * z) && (!best || dist < best.d)) best = { id: f.id, d: dist };
+    }
+    if (best) return { kind: 'craft', id: best.id };
+    const ms = world.myMothership();
+    if (ms) {
+      const p = this.worldToScreen(ms.x, ms.y);
+      if (Math.hypot(p.x - sx, p.y - sy) < Math.max(30, 120 * z)) return { kind: 'quarters' };
     }
     return null;
   }
@@ -159,6 +187,7 @@ export class Scene {
     });
 
     this.syncEntities(world);
+    this.drawFormation(world);
     this.stepParticles(dt);
     if (this.kind === 'galaxy') this.drawGalaxy(world, selectedTarget);
     this.drawOverlay(world);
@@ -276,6 +305,7 @@ export class Scene {
         }
       }
       if (v.cargo) v.cargo.visible = (f & FLAG_LOADED) !== 0;
+      v.rotor.alpha = f & FLAG_IDLE ? 0.6 : 1;
       if (d.w.k === 'critter') {
         v.rotor.alpha = 0.75 + Math.sin(this.time * 3 + id) * 0.25;
       }
@@ -284,6 +314,43 @@ export class Scene {
       if (!world.ents.has(id)) {
         v.root.destroy({ children: true });
         this.views.delete(id);
+      }
+    }
+  }
+
+  /** Formation ring around our mothership: empty slots, the slot your craft returns to, drag highlights. */
+  private drawFormation(world: World): void {
+    const g = this.formationG;
+    g.clear();
+    if (this.kind !== 'system' || !world.crew) return;
+    const ms = world.myMothership();
+    if (!ms) return;
+    const fleet = world.crew.fleet;
+    g.circle(ms.x, ms.y, FORMATION.radius).stroke({ width: 1.5, color: 0x8fa8ff, alpha: 0.12 });
+
+    // Depot: rail nodes inside the ring are where carts deploy and unload. Pulse the ring while carts can't deploy.
+    const carts = world.crew.cartStatus;
+    if (carts && !carts.depotLinked && world.crew.carts > 0) {
+      g.circle(ms.x, ms.y, RAIL.depotRadius).stroke({ width: 4, color: 0x4dff9a, alpha: 0.25 + 0.25 * Math.sin(this.time * 3) });
+    }
+    for (const n of world.rails.nodes) {
+      if (Math.hypot(n.x - ms.x, n.y - ms.y) <= RAIL.depotRadius) g.circle(n.x, n.y, 7).fill({ color: 0x4dff9a, alpha: 0.7 });
+    }
+    const mine = world.predicted?.id;
+    const pulse = 0.5 + Math.sin(this.time * 4) * 0.3;
+    for (const f of fleet) {
+      const t = formationSlot({ x: ms.x, y: ms.y, angle: ms.a }, f.slot, fleet.length);
+      const own = f.id === mine;
+      if (f.out || own) {
+        g.circle(t.x, t.y, FORMATION.dockRadius * (own ? 0.7 : 0.45)).stroke({
+          width: own ? 3 : 1.5,
+          color: own ? 0x00ffcc : 0x8fa8ff,
+          alpha: own ? pulse : 0.25,
+        });
+      }
+      if (f.id === this.hoverId) {
+        const d = world.ents.get(f.id);
+        if (d) g.circle(d.x, d.y, 34).stroke({ width: 3, color: 0x00ffcc, alpha: 0.9 });
       }
     }
   }

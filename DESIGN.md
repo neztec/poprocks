@@ -18,7 +18,9 @@ Parts harvested (rewritten, not copied) from `~/Git/Antopolous`.
 | Milestone 1 | A rough version of every system (see below). |
 | Rendering | PixiJS (WebGL). |
 | Stack | TypeScript everywhere, Node server, WebSockets, SQLite, React admin site. |
-| Input | Mouse/keyboard and gamepad from day one. |
+| Input | Mouse/keyboard and gamepad from day one. Keyboard is Star Control style: A/D rotate, W thrusts along the nose, S brakes. Mouse (hold LMB) and stick still point-to-steer. |
+| Mothership in a system | Drivable from the helm but slow (a base of operations, not a way to blast to objectives). Later: a power-distribution system that mostly charges the long-range jump out. |
+| Crew & fleet | The mothership shows a helm seat, crew quarters (offline members shown there too) and the crew's fleet of craft holding formation slots around it. Drag your face onto a seat or craft to move there; flying a craft back into its slot re-docks it. |
 | Dropped from Antopolous | Crystals/fuel, formation mods, queen/eggs/colonies, rainbow gem, collectibles. |
 
 ## Harvest map (Antopolous → Poprock)

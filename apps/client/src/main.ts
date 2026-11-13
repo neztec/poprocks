@@ -93,6 +93,14 @@ async function start(name: string): Promise<void> {
     if (!inCraft()) net.send({ t: 'launch', craft });
   };
 
+  const panel = hud.crewPanel;
+  panel.worldTargetAt = (x, y) => scene.seatTargetAt(world, x, y);
+  panel.onWorldHover = (t) => (scene.hoverId = t?.kind === 'craft' ? t.id : null);
+  panel.onSeat = (t) => {
+    if (t.kind === 'craft') net.send({ t: 'board', craftId: t.id });
+    else net.send({ t: 'seat', seat: t.kind });
+  };
+
   input.onAction = act;
   hud.onAction = act;
   input.onWheel = (dy) => scene.zoomBy(dy > 0 ? 0.9 : 1.1);

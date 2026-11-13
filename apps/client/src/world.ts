@@ -143,7 +143,7 @@ export class World {
   }
 
   private env() {
-    return { dt: DT, asteroids: this.asteroids, bodies: this.bodies };
+    return { dt: DT, asteroids: this.asteroids, bodies: this.bodies, galaxy: this.space?.kind === 'galaxy' };
   }
 
   /** One fixed client tick: predict own ship and return the message to send. */

@@ -54,8 +54,8 @@ const PAD_DEADZONE = 0.18;
 const MOUSE_FULL_STICK_PX = 180;
 
 /**
- * Turns mouse/keyboard/gamepad into a stick vector plus buttons, like Antopolous's InputManager.
- * Mouse: hold left button to steer toward the cursor, right button for the action.
+ * Turns mouse/keyboard/gamepad into an InputState.
+ * Mouse and stick point the ship (hold LMB toward the cursor); the keyboard rotates and thrusts.
  */
 export class Input {
   private keys = new Set<string>();
@@ -162,16 +162,15 @@ export class Input {
       }
     }
 
-    if (sx === 0 && sy === 0) {
-      const k = this.keys;
-      const kx = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
-      const ky = (k.has('s') || k.has('arrowdown') ? 1 : 0) - (k.has('w') || k.has('arrowup') ? 1 : 0);
-      const m = Math.hypot(kx, ky);
-      if (m > 0) {
-        sx = kx / m;
-        sy = ky / m;
-      }
+    // Keyboard is Star Control style: A/D rotate, W thrusts along the nose, S brakes.
+    const k = this.keys;
+    const turn = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
+    const thrust = k.has('w') || k.has('arrowup') ? 1 : 0;
+    const brake = k.has('s') || k.has('arrowdown');
+    if (turn !== 0 || thrust !== 0) {
+      // Keys win over a resting mouse/stick so the two styles never fight.
+      sx = sy = 0;
     }
-    return { sx, sy, boost, action };
+    return { sx, sy, turn, thrust, brake, boost, action };
   }
 }

@@ -2,7 +2,10 @@ import type { WebSocket } from 'ws';
 import {
   CART_COST,
   CRAFT_KINDS,
+  DEFAULT_FLEET,
   DOCK_RADIUS,
+  FLAG_IDLE,
+  FORMATION,
   DT,
   FLAG_BOOSTING,
   FLAG_DRILLING,
@@ -17,9 +20,11 @@ import {
   autopilotEta,
   copyShip,
   emptyResources,
+  formationSlot,
   makeShip,
   stepShip,
   totalResources,
+  turnToward,
   type ClientMsg,
   type CraftKind,
   type CrewWire,
@@ -56,7 +61,11 @@ export interface Crew {
   /** parked system, or null in hyperspace */
   systemId: number | null;
   pilotId: number | null;
+  /** online players */
   members: Set<number>;
+  /** everyone who has ever come aboard, by name */
+  roster: string[];
+  fleet: Craft[];
 }
 
 const MAX_QUEUED_INPUTS = 4;
@@ -97,6 +106,7 @@ export class Game implements SystemHost {
   private addCrew(id: number, name: string, data: CrewData): void {
     const sys = data.systemId != null ? this.systems.get(data.systemId) : undefined;
     const ship = makeShip(this.nextEntityId(), 'mothership', data.gx, data.gy, data.angle);
+    const kinds = (data.fleet ?? DEFAULT_FLEET).filter((k) => CRAFT_KINDS.includes(k));
     const crew: Crew = {
       id,
       name,
@@ -106,8 +116,19 @@ export class Game implements SystemHost {
       systemId: sys ? sys.row.id : null,
       pilotId: null,
       members: new Set(),
+      roster: [...(data.roster ?? [])],
+      fleet: kinds.map((kind, slot) => ({
+        ship: makeShip(this.nextEntityId(), kind, 0, 0),
+        kind,
+        crewId: id,
+        slot,
+        pilotId: null,
+        cargo: emptyResources(),
+        railTail: null,
+        armed: false,
+      })),
     };
-    if (sys) this.park(crew, sys);
+    if (sys) this.park(crew, sys, data.lx != null && data.ly != null ? { x: data.lx, y: data.ly } : undefined);
     this.crews.set(id, crew);
   }
 
@@ -147,6 +168,7 @@ export class Game implements SystemHost {
       spaceKey: null,
     };
     crew.members.add(p.id);
+    if (!crew.roster.includes(p.name)) crew.roster.push(p.name);
     this.players.set(p.id, p);
     this.send(p, { t: 'welcome', playerId: p.id, tickHz: TICK_HZ });
     this.toastCrew(crew, `${p.name} came aboard.`);
@@ -156,7 +178,7 @@ export class Game implements SystemHost {
 
   disconnect(p: Player): void {
     const crew = this.crews.get(p.crewId);
-    if (p.craft) this.dock(p, true);
+    if (p.craft) this.dock(p, true); // the empty craft flies itself back into formation
     if (crew) {
       crew.members.delete(p.id);
       if (crew.pilotId === p.id) crew.pilotId = null;
@@ -173,16 +195,32 @@ export class Game implements SystemHost {
         p.inputs.push({ seq: msg.seq, i: sanitizeInput(msg.i) });
         if (p.inputs.length > MAX_QUEUED_INPUTS * 4) p.inputs.splice(0, p.inputs.length - MAX_QUEUED_INPUTS);
         break;
-      case 'launch':
-        this.launch(p, crew, msg.craft);
+      case 'launch': {
+        if (p.craft) break;
+        const free = crew.fleet.find((c) => c.kind === msg.craft && c.pilotId == null);
+        if (free) this.board(p, crew, free);
+        else this.send(p, { t: 'toast', text: `No free ${SHIP_SPECS[msg.craft]?.label ?? 'craft'} in the formation.` });
         break;
+      }
+      case 'board': {
+        const craft = crew.fleet.find((c) => c.ship.id === msg.craftId);
+        if (craft) this.board(p, crew, craft);
+        break;
+      }
       case 'dock':
         this.dock(p, false);
         break;
+      case 'seat':
+        if (msg.seat === 'helm') this.takeHelm(p, crew);
+        else {
+          if (p.craft) this.dock(p, false);
+          else if (crew.pilotId === p.id) crew.pilotId = null;
+          this.crewDirty = true;
+        }
+        break;
       case 'helm':
-        if (msg.take && crew.pilotId == null) crew.pilotId = p.id;
-        else if (!msg.take && crew.pilotId === p.id) crew.pilotId = null;
-        else if (msg.take) this.send(p, { t: 'toast', text: 'Someone else has the helm.' });
+        if (msg.take) this.takeHelm(p, crew);
+        else if (crew.pilotId === p.id) crew.pilotId = null;
         this.crewDirty = true;
         break;
       case 'autopilot':
@@ -217,45 +255,104 @@ export class Game implements SystemHost {
     }
   }
 
-  private launch(p: Player, crew: Crew, kind: CraftKind): void {
-    if (p.craft) return;
-    if (!CRAFT_KINDS.includes(kind)) return;
+  private takeHelm(p: Player, crew: Crew): void {
+    if (crew.pilotId != null && crew.pilotId !== p.id) {
+      this.send(p, { t: 'toast', text: 'Someone else has the helm.' });
+      return;
+    }
+    if (p.craft) {
+      this.dock(p, false);
+      if (p.craft) return; // too far out to dock
+    }
+    crew.pilotId = p.id;
+    this.crewDirty = true;
+  }
+
+  /** Put a player in the cockpit of one of the crew's formation craft. */
+  private board(p: Player, crew: Crew, craft: Craft): void {
+    if (p.craft) {
+      this.send(p, { t: 'toast', text: 'Dock your current craft first.' });
+      return;
+    }
     if (crew.systemId == null) {
       this.send(p, { t: 'toast', text: 'Craft can only launch inside a star system.' });
       return;
     }
-    const sys = this.systems.get(crew.systemId)!;
+    if (craft.pilotId != null) {
+      const other = this.players.get(craft.pilotId);
+      this.send(p, { t: 'toast', text: `${other?.name ?? 'Someone'} is flying that one.` });
+      return;
+    }
+    if (crew.pilotId === p.id) crew.pilotId = null;
+    craft.pilotId = p.id;
+    craft.armed = false;
+    craft.railTail = null;
+    // Nudge it outward from the mothership so it clears the formation ring.
     const m = crew.mothership;
-    const a = Math.random() * Math.PI * 2;
-    const ship = makeShip(this.nextEntityId(), kind, m.x + Math.cos(a) * 90, m.y + Math.sin(a) * 90, a);
-    ship.vx = Math.cos(a) * 180;
-    ship.vy = Math.sin(a) * 180;
-    const craft: Craft = { ship, kind, ownerId: p.id, crewId: crew.id, cargo: emptyResources(), railTail: null };
-    sys.crafts.set(ship.id, craft);
+    const a = Math.atan2(craft.ship.y - m.y, craft.ship.x - m.x);
+    craft.ship.vx = m.vx + Math.cos(a) * 140;
+    craft.ship.vy = m.vy + Math.sin(a) * 140;
     p.craft = craft;
     p.inputs = [];
     this.crewDirty = true;
   }
 
-  /** Return a player's craft to the mothership, depositing cargo. `force` skips the range check. */
+  /** Hand a player's craft back to the formation, depositing cargo. `force` skips the range check. */
   private dock(p: Player, force: boolean): void {
     const crew = this.crews.get(p.crewId)!;
     const craft = p.craft;
     if (!craft) return;
     const m = crew.mothership;
-    if (!force && Math.hypot(craft.ship.x - m.x, craft.ship.y - m.y) > DOCK_RADIUS) {
+    if (!force && Math.hypot(craft.ship.x - m.x, craft.ship.y - m.y) > DOCK_RADIUS && !this.nearSlot(crew, craft)) {
       this.send(p, { t: 'toast', text: 'Too far from the mothership to dock.' });
       return;
     }
     const n = totalResources(craft.cargo);
     if (n > 0) {
       this.deposit(crew.id, craft.cargo);
+      craft.cargo = emptyResources();
       if (!force) this.toastCrew(crew, `${p.name} delivered ${n} ore.`);
     }
-    for (const sys of this.systems.values()) sys.crafts.delete(craft.ship.id);
+    craft.pilotId = null;
+    craft.railTail = null;
+    craft.ship.drilling = craft.ship.boosting = false;
     p.craft = null;
     p.inputs = [];
     this.crewDirty = true;
+  }
+
+  private slotOf(crew: Crew, craft: Craft): { x: number; y: number; angle: number } {
+    return formationSlot(crew.mothership, craft.slot, crew.fleet.length);
+  }
+
+  private nearSlot(crew: Crew, craft: Craft): boolean {
+    const t = this.slotOf(crew, craft);
+    return Math.hypot(craft.ship.x - t.x, craft.ship.y - t.y) < FORMATION.dockRadius;
+  }
+
+  /** Unmanned craft fly to their slot and hold station there as the mothership moves. */
+  private holdFormation(crew: Crew, craft: Craft, dt: number): void {
+    const s = craft.ship;
+    const t = this.slotOf(crew, craft);
+    const m = crew.mothership;
+    const dx = t.x - s.x;
+    const dy = t.y - s.y;
+    const d = Math.hypot(dx, dy);
+    // Match the mothership's velocity plus a spring toward the slot, capped.
+    let vx = m.vx + dx * 3;
+    let vy = m.vy + dy * 3;
+    const sp = Math.hypot(vx, vy);
+    if (sp > FORMATION.returnSpeed) {
+      vx *= FORMATION.returnSpeed / sp;
+      vy *= FORMATION.returnSpeed / sp;
+    }
+    s.vx = vx;
+    s.vy = vy;
+    s.x += vx * dt;
+    s.y += vy * dt;
+    const face = d > 60 ? Math.atan2(dy, dx) : t.angle;
+    s.angle = turnToward(s.angle, face, SHIP_SPECS[craft.kind].turnRate * dt);
+    s.drilling = s.boosting = false;
   }
 
   private setAutopilot(p: Player, crew: Crew, systemId: number | null): void {
@@ -272,15 +369,21 @@ export class Game implements SystemHost {
     this.crewDirty = true;
   }
 
-  private park(crew: Crew, sys: SystemSpace): void {
+  private park(crew: Crew, sys: SystemSpace, at?: { x: number; y: number }): void {
     const m = crew.mothership;
-    m.x = sys.row.def.park.x;
-    m.y = sys.row.def.park.y;
+    m.x = at?.x ?? sys.row.def.park.x;
+    m.y = at?.y ?? sys.row.def.park.y;
     m.vx = 0;
     m.vy = 0;
     m.ap = null;
     crew.systemId = sys.row.id;
     sys.addCarts(crew.id, crew.carts, m.x, m.y);
+    for (const c of crew.fleet) {
+      const t = this.slotOf(crew, c);
+      Object.assign(c.ship, { x: t.x, y: t.y, vx: 0, vy: 0, angle: t.angle, ap: null });
+      c.pilotId = null;
+      sys.crafts.set(c.ship.id, c);
+    }
   }
 
   private enterSystem(crew: Crew, sys: SystemSpace): void {
@@ -300,6 +403,7 @@ export class Game implements SystemHost {
       }
     }
     this.deposit(crew.id, sys.removeCarts(crew.id));
+    for (const c of crew.fleet) sys.crafts.delete(c.ship.id);
     const m = crew.mothership;
     const a = m.angle;
     m.x = sys.row.gx + Math.cos(a) * GALAXY.exitDistance;
@@ -316,7 +420,7 @@ export class Game implements SystemHost {
 
   step(): void {
     this.tick++;
-    const galaxy = { dt: DT, asteroids: [], bodies: [] };
+    const galaxy = { dt: DT, asteroids: [], bodies: [], galaxy: true };
 
     for (const p of this.players.values()) {
       const next = p.inputs.shift();
@@ -332,6 +436,14 @@ export class Game implements SystemHost {
       }
     }
 
+    // Motherships inside systems: the helm drives them slowly around the system.
+    for (const crew of this.crews.values()) {
+      const sys = crew.systemId != null ? this.systems.get(crew.systemId) : undefined;
+      if (!sys) continue;
+      const pilot = crew.pilotId != null ? this.players.get(crew.pilotId) : undefined;
+      stepShip(crew.mothership, pilot && !pilot.craft ? pilot.lastInput : NO_INPUT, { dt: DT, asteroids: sys.asteroids, bodies: sys.bodies });
+    }
+
     // Crafts inside systems.
     for (const sys of this.systems.values()) {
       const env = {
@@ -341,8 +453,13 @@ export class Game implements SystemHost {
         onPaint: (op: PaintOp) => sys.paintQueue.push(op),
       };
       for (const craft of sys.crafts.values()) {
-        const owner = this.players.get(craft.ownerId);
-        const input = owner ? owner.lastInput : NO_INPUT;
+        const crew = this.crews.get(craft.crewId)!;
+        const owner = craft.pilotId != null ? this.players.get(craft.pilotId) : undefined;
+        if (!owner) {
+          this.holdFormation(crew, craft, DT);
+          continue;
+        }
+        const input = owner.lastInput;
         const hold = SHIP_SPECS[craft.kind].hold;
         stepShip(craft.ship, input, {
           ...env,
@@ -356,6 +473,14 @@ export class Game implements SystemHost {
           },
         });
         if (craft.kind === 'layer') sys.layRail(craft, input.action);
+        // Flying back into your formation slot re-docks: the craft parks and you return to quarters.
+        const t = this.slotOf(crew, craft);
+        const d = Math.hypot(craft.ship.x - t.x, craft.ship.y - t.y);
+        if (d > FORMATION.armDistance) craft.armed = true;
+        else if (craft.armed && d < FORMATION.dockRadius) {
+          this.dock(owner, false);
+          this.send(owner, { t: 'toast', text: `${SHIP_SPECS[craft.kind].label} back in formation. You're in crew quarters.` });
+        }
       }
       sys.step();
     }
@@ -365,7 +490,7 @@ export class Game implements SystemHost {
       if (crew.systemId != null) continue;
       const pilot = crew.pilotId != null ? this.players.get(crew.pilotId) : undefined;
       const hadAp = crew.mothership.ap != null;
-      stepShip(crew.mothership, pilot ? pilot.lastInput : NO_INPUT, galaxy);
+      stepShip(crew.mothership, pilot && !pilot.craft ? pilot.lastInput : NO_INPUT, galaxy);
       if (hadAp !== (crew.mothership.ap != null)) this.crewDirty = true;
       for (const sys of this.systems.values()) {
         if (Math.hypot(crew.mothership.x - sys.row.gx, crew.mothership.y - sys.row.gy) < GALAXY.enterRadius) {
@@ -455,10 +580,10 @@ export class Game implements SystemHost {
     }
   }
 
-  /** The ship this player predicts locally: their craft, or the mothership if piloting in hyperspace. */
+  /** The ship this player predicts locally: their craft, or the mothership when at the helm. */
   private controlledShip(p: Player, crew: Crew): ShipState | null {
     if (p.craft) return p.craft.ship;
-    if (crew.pilotId === p.id && crew.systemId == null) return crew.mothership;
+    if (crew.pilotId === p.id) return crew.mothership;
     return null;
   }
 
@@ -481,12 +606,13 @@ export class Game implements SystemHost {
     const sys = this.systems.get(systemId)!;
     const out: EntWire[] = [];
     for (const crew of this.crews.values()) {
-      if (crew.systemId === systemId) out.push({ ...shipWire(crew.mothership, crew.name), f: 0 });
+      if (crew.systemId === systemId) out.push(shipWire(crew.mothership, crew.name));
     }
     for (const c of sys.crafts.values()) {
-      const owner = this.players.get(c.ownerId);
+      const owner = c.pilotId != null ? this.players.get(c.pilotId) : undefined;
       const w = shipWire(c.ship, owner?.name);
       if (totalResources(c.cargo) > 0) w.f |= FLAG_LOADED;
+      if (!owner) w.f |= FLAG_IDLE;
       out.push(w);
     }
     for (const c of sys.carts) {
@@ -506,11 +632,24 @@ export class Game implements SystemHost {
       name: crew.name,
       resources: crew.resources,
       carts: crew.carts,
+      cartStatus: sys ? sys.cartSummary(crew.id) : null,
       pilotId: crew.pilotId,
-      members: [...crew.members].map((id) => {
-        const p = this.players.get(id)!;
-        return { id, name: p.name, craft: p.craft?.kind ?? null };
-      }),
+      members: [
+        ...[...crew.members].map((id) => {
+          const p = this.players.get(id)!;
+          return { id, name: p.name, online: true, craftId: p.craft?.ship.id ?? null, craft: p.craft?.kind ?? null };
+        }),
+        ...crew.roster
+          .filter((n) => ![...crew.members].some((id) => this.players.get(id)?.name === n))
+          .map((name) => ({ id: null, name, online: false, craftId: null, craft: null })),
+      ],
+      fleet: crew.fleet.map((c) => ({
+        id: c.ship.id,
+        kind: c.kind,
+        slot: c.slot,
+        pilotId: c.pilotId,
+        out: crew.systemId != null && !this.nearSlot(crew, c),
+      })),
       location: sys ? sys.row.name : 'Hyperspace',
       inSystem: !!sys,
       autopilotTarget: crew.mothership.ap?.systemId ?? null,
@@ -560,6 +699,10 @@ export class Game implements SystemHost {
         gx: sys ? sys.row.gx : m.x,
         gy: sys ? sys.row.gy : m.y,
         angle: m.angle,
+        lx: sys ? Math.round(m.x) : undefined,
+        ly: sys ? Math.round(m.y) : undefined,
+        fleet: crew.fleet.map((c) => c.kind),
+        roster: crew.roster,
       });
     }
   }
@@ -594,7 +737,15 @@ function shipWire(s: ShipState, name?: string): EntWire {
 
 function sanitizeInput(i: InputState): InputState {
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
-  return { sx: num(i?.sx), sy: num(i?.sy), boost: !!i?.boost, action: !!i?.action };
+  return {
+    sx: num(i?.sx),
+    sy: num(i?.sy),
+    turn: num(i?.turn),
+    thrust: Math.max(0, num(i?.thrust)),
+    brake: !!i?.brake,
+    boost: !!i?.boost,
+    action: !!i?.action,
+  };
 }
 
 function r1(v: number): number {
