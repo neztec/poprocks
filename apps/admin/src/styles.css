@@ -1,0 +1,210 @@
+:root {
+  --bg: #070a14;
+  --panel: #0d1222;
+  --line: #222b48;
+  --text: #dfe6ff;
+  --dim: #8b95b8;
+  --accent: #00ffcc;
+  --danger: #ff6a7a;
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 16px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-weight: normal;
+}
+nav button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: #121a33;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 9px;
+}
+button {
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--accent);
+}
+button.primary {
+  background: var(--accent);
+  color: #001a14;
+  border-color: var(--accent);
+}
+button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+textarea {
+  width: 100%;
+  margin-top: 6px;
+  resize: vertical;
+}
+input.num {
+  width: 90px;
+}
+section,
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.card {
+  background: #0a0f1d;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+}
+.split {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+}
+@media (max-width: 800px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+aside .list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+aside .list li {
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+aside .list li.active,
+aside .list li:hover {
+  background: #121a33;
+}
+.dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+}
+.form label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--dim);
+}
+label.block {
+  display: block;
+  margin-top: 10px;
+  color: var(--dim);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th,
+td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  color: var(--dim);
+  font-weight: normal;
+}
+td input {
+  width: 100%;
+}
+td.nowrap {
+  white-space: nowrap;
+}
+.map {
+  width: 100%;
+  max-width: 560px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: crosshair;
+  display: block;
+}
+.map.small {
+  cursor: default;
+}
+.dim {
+  color: var(--dim);
+}
+.error {
+  background: #3a1220;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+form.inline {
+  display: flex;
+  gap: 8px;
+}
+form.inline input {
+  flex: 1;
+}

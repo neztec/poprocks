@@ -1,0 +1,24 @@
+{
+  "name": "poprock",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client,admin -c cyan,magenta,yellow \"npm:dev:server\" \"npm:dev:client\" \"npm:dev:admin\"",
+    "dev:server": "npm run dev -w @poprock/server",
+    "dev:client": "npm run dev -w @poprock/client",
+    "dev:admin": "npm run dev -w @poprock/admin",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test -w @poprock/shared"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "~5.6.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
